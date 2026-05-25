@@ -8,9 +8,23 @@
 library(tidyverse)   # includes ggplot2, dplyr, tidyr, readr
 library(lubridate)   # for date handling
 
-# Create output folder if missing
-out_fig <- file.path("outputs", "figures")
+# Create output folder if missing (handle different working directories: project root or report/)
+cands <- c(
+  file.path(getwd(), "outputs", "figures"),
+  file.path(getwd(), "..", "outputs", "figures"),
+  file.path(getwd(), "..", "..", "outputs", "figures")
+)
+# choose existing candidate or default to first
+found <- cands[dir.exists(cands)]
+if (length(found) > 0) {
+  out_fig <- found[1]
+} else {
+  out_fig <- cands[1]
+}
 if (!dir.exists(out_fig)) dir.create(out_fig, recursive = TRUE)
+# Ensure out_fig is available in the global environment (helps when the script is sourced from other working directories)
+assign("out_fig", out_fig, envir = .GlobalEnv)
+message('Using out_fig = ', out_fig, ' (created if missing)')
 
 # URLs from the TidyTuesday dataset description
 url_temp <- 'https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2026/2026-03-31/ocean_temperature.csv'
@@ -71,7 +85,7 @@ p_heat_data <- df %>%
   summarise(mean_temp = mean(mean_temperature_degree_c, na.rm = TRUE), .groups = 'drop') %>%
   filter(!is.na(mean_temp))
 
-p1 <- ggplot(p_heat_data, aes(x = month, y = depth_round, fill = mean_temp)) +
+p1 <- ggplot2::ggplot(p_heat_data, aes(x = month, y = depth_round, fill = mean_temp)) +
   geom_tile() +
   scale_y_reverse(expand = c(0,0)) +  # depth increases downward
   scale_fill_viridis_c(name = 'Temperature (°C)') +
@@ -80,7 +94,7 @@ p1 <- ggplot(p_heat_data, aes(x = month, y = depth_round, fill = mean_temp)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-ggsave(filename = file.path(out_fig, 'heatmap_temp_depth_time.png'), plot = p1, width = 10, height = 4, dpi = 300)
+ggplot2::ggsave(filename = file.path(out_fig, 'heatmap_temp_depth_time.png'), plot = p1, width = 10, height = 4, dpi = 300)
 
 # 2) Depth profiles: one line per year (2019-2023)
 # - Compute mean temperature by year and depth
@@ -89,13 +103,13 @@ profiles <- df %>%
   summarise(mean_temp = mean(mean_temperature_degree_c, na.rm = TRUE), .groups = 'drop') %>%
   filter(!is.na(mean_temp))
 
-p2 <- ggplot(profiles, aes(x = mean_temp, y = depth_m, color = factor(year), group = factor(year))) +
-  geom_line(size = 1) +
+p2 <- ggplot2::ggplot(profiles, aes(x = mean_temp, y = depth_m, color = factor(year), group = factor(year))) +
+  geom_line(linewidth = 1) +
   scale_y_reverse() +
   labs(title = paste0('Depth profiles: ', min(wanted_years), '-', max(wanted_years)), x = 'Mean temperature (°C)', y = 'Depth (m)', color = 'Year') +
   theme_minimal()
 
-ggsave(filename = file.path(out_fig, 'depth_profiles.png'), plot = p2, width = 6, height = 5, dpi = 300)
+ggplot2::ggsave(filename = file.path(out_fig, 'depth_profiles.png'), plot = p2, width = 6, height = 5, dpi = 300)
 
 # 3) Yearly temperature by depth (binned depths for clarity)
 # - Use a simple bin size (5 m) to reduce number of lines
@@ -104,14 +118,25 @@ yearly_binned <- df %>%
   mutate(depth_bin = round(depth_m / bin_size) * bin_size) %>%
   group_by(year, depth_bin) %>%
   summarise(mean_temp = mean(mean_temperature_degree_c, na.rm = TRUE), .groups = 'drop') %>%
-  filter(!is.na(mean_temp))
+  tidyr::complete(depth_bin, year = wanted_years) %>%
+  arrange(depth_bin, year)
 
-p3 <- ggplot(yearly_binned, aes(x = year, y = mean_temp, color = factor(depth_bin), group = factor(depth_bin))) +
-  geom_line(size = 0.9) +
-  labs(title = 'Yearly mean temperature by depth (binned)', x = 'Year', y = 'Mean temperature (°C)', color = 'Depth (m)') +
-  theme_minimal()
+# Expose variable when sourced interactively
+assign('yearly_binned', yearly_binned, envir = .GlobalEnv)
 
-ggsave(filename = file.path(out_fig, 'yearly_temp_by_depth.png'), plot = p3, width = 8, height = 5, dpi = 300)
+# Note: keep NA mean_temp so geom_line breaks at missing years (prevents connecting across gaps)
+# Only plot/save if there is at least one non-missing mean_temp value
+if (nrow(dplyr::filter(yearly_binned, !is.na(mean_temp))) > 0) {
+  p3 <- ggplot2::ggplot(yearly_binned, aes(x = year, y = mean_temp, color = factor(depth_bin), group = factor(depth_bin))) +
+    geom_line(linewidth = 0.9) +
+    labs(title = 'Yearly mean temperature by depth (binned)', x = 'Year', y = 'Mean temperature (°C)', color = 'Depth (m)') +
+    theme_minimal()
+
+  ggplot2::ggsave(filename = file.path(out_fig, 'yearly_temp_by_depth.png'), plot = p3, width = 8, height = 5, dpi = 300)
+} else {
+  message('No data available to create yearly_temp_by_depth plot (all mean_temp are NA)')
+}
+
 
 # Simple summary: mean temperature by year (console output)
 summary_by_year <- df %>%
